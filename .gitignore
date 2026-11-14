@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Builds and local tooling
+dist/
+.expo/
+*.log
+
+# Environment and local data
+.env
+.env.*
+!.env.example
+backend/data/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Expo export outputs
+mobile/dist*/
