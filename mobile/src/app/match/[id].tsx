@@ -177,16 +177,27 @@ export default function MatchDetailScreen() {
               ))}
             </View>
           ) : (
-            <Text style={styles.emptyInline}>Aucun événement pour le moment. Les temps forts apparaîtront en direct.</Text>
+            <Text style={styles.emptyInline}>{match.status === 'FINISHED' ? 'Aucun événement enregistré pour ce match.' : 'Aucun événement pour le moment. Les temps forts apparaîtront en direct.'}</Text>
           )}
         </View>
 
-        <Text style={styles.sectionTitle}>Marchés & probabilités</Text>
-        {match.markets.map((market) => (
-          <MarketCard key={market.id} market={market} onSelect={pick} canBet={(id) => isBettableSelection(id) && match.status !== 'FINISHED'} />
-        ))}
-
-        <Text style={styles.note}>Les statistiques, événements et probabilités évoluent en temps réel (simulation). Les paris démo sont disponibles sur le marché 1X2.</Text>
+        {match.status === 'FINISHED' ? (
+          <View style={styles.archivedCard}>
+            <Ionicons name="archive-outline" size={18} color={colors.muted} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.archivedTitle}>Match archivé · Paris fermés</Text>
+              <Text style={styles.archivedSub}>Ce match est terminé. Les marchés/paris ne sont plus disponibles, tu peux consulter le résumé, les stats et les événements ci-dessus.</Text>
+            </View>
+          </View>
+        ) : (
+          <>
+            <Text style={styles.sectionTitle}>Marchés & probabilités</Text>
+            {match.markets.map((market) => (
+              <MarketCard key={market.id} market={market} onSelect={pick} canBet={(id) => isBettableSelection(id) && match.status !== 'FINISHED'} />
+            ))}
+            <Text style={styles.note}>Les statistiques, événements et probabilités évoluent en temps réel (simulation). Les paris démo sont disponibles sur le marché 1X2.</Text>
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -259,6 +270,9 @@ const styles = StyleSheet.create({
   probText: { color: colors.muted, fontSize: 10, width: 42, textAlign: 'right', fontWeight: '700' },
   infoOnly: { color: colors.muted, fontSize: 9, marginTop: 6 },
   note: { color: colors.muted, fontSize: 10, lineHeight: 15, textAlign: 'center', marginTop: 6 },
+  archivedCard: { flexDirection: 'row', gap: 12, alignItems: 'flex-start', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.medium, padding: 14, marginTop: 4 },
+  archivedTitle: { color: colors.text, fontSize: 13, fontWeight: '800', marginBottom: 4 },
+  archivedSub: { color: colors.muted, fontSize: 12, lineHeight: 17 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyText: { color: colors.muted },
   emptyInline: { color: colors.muted, fontSize: 12, lineHeight: 17 },

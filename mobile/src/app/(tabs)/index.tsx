@@ -70,7 +70,21 @@ export default function MatchesScreen() {
       <FlatList
         data={visibleMatches}
         keyExtractor={(match) => match.id}
-        renderItem={({ item }) => <MatchCard match={item} onSelect={openSelection} onOpen={(m) => router.push(`/match/${m.id}` as never)} />}
+        renderItem={({ item, index }) => {
+          const prev = visibleMatches[index - 1];
+          const showArchiveHeader = filter === 'ALL' && item.status === 'FINISHED' && (!prev || prev.status !== 'FINISHED');
+          return (
+            <View>
+              {showArchiveHeader ? (
+                <View style={styles.archiveHeader}>
+                  <Ionicons name="archive-outline" size={14} color={colors.muted} />
+                  <Text style={styles.archiveHeaderText}>Matchs terminés (archives)</Text>
+                </View>
+              ) : null}
+              <MatchCard match={item} onSelect={openSelection} onOpen={(m) => router.push(`/match/${m.id}` as never)} />
+            </View>
+          );
+        }}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={refresh} tintColor={colors.accent} colors={[colors.accent]} progressBackgroundColor={colors.surface} />}
@@ -188,4 +202,6 @@ const styles = StyleSheet.create({
   liveChipTeam: { color: colors.text, fontSize: 12, fontWeight: '700', flex: 1 },
   liveChipScore: { color: colors.text, fontSize: 14, fontWeight: '900', width: 18, textAlign: 'right' },
   liveChipInfo: { color: colors.muted, fontSize: 10, lineHeight: 14, marginTop: 2 },
+  archiveHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, marginBottom: 10 },
+  archiveHeaderText: { color: colors.muted, fontSize: 12, fontWeight: '800' },
 });
