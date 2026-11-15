@@ -66,6 +66,15 @@ export function openDatabase(databasePath: string): DatabaseSync {
     CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id);
     CREATE INDEX IF NOT EXISTS idx_auth_tokens_expiry ON auth_tokens(expires_at);
 
+    CREATE TABLE IF NOT EXISTS two_factor_challenges (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS idx_two_factor_challenges_user ON two_factor_challenges(user_id);
+
     CREATE TABLE IF NOT EXISTS matches (
       id TEXT PRIMARY KEY,
       league TEXT NOT NULL,
@@ -179,6 +188,11 @@ function migrateBets(db: DatabaseSync): void {
 function migrateUsers(db: DatabaseSync): void {
   if (!hasColumn(db, 'users', 'email')) db.exec(`ALTER TABLE users ADD COLUMN email TEXT`);
   if (!hasColumn(db, 'users', 'password_hash')) db.exec(`ALTER TABLE users ADD COLUMN password_hash TEXT`);
+  if (!hasColumn(db, 'users', 'phone')) db.exec(`ALTER TABLE users ADD COLUMN phone TEXT`);
+  if (!hasColumn(db, 'users', 'two_factor_secret')) db.exec(`ALTER TABLE users ADD COLUMN two_factor_secret TEXT`);
+  if (!hasColumn(db, 'users', 'two_factor_enabled')) {
+    db.exec(`ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER NOT NULL DEFAULT 0`);
+  }
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL`);
 }
 

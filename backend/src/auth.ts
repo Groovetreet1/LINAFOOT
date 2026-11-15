@@ -6,6 +6,7 @@ import { AppError } from './errors.ts';
 export interface AuthUser {
   id: string;
   displayName: string;
+  tokenHash: string;
 }
 
 declare module 'fastify' {
@@ -51,7 +52,7 @@ export function authenticate(db: DatabaseSync) {
     }
 
     const row = db.prepare(`
-      SELECT users.id, users.display_name AS displayName
+      SELECT users.id, users.display_name AS displayName, auth_tokens.token_hash AS tokenHash
       FROM auth_tokens
       JOIN users ON users.id = auth_tokens.user_id
       WHERE auth_tokens.token_hash = ? AND auth_tokens.expires_at > ?

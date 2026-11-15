@@ -4,10 +4,11 @@ import helmet from '@fastify/helmet';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { z, type ZodType } from 'zod';
-import { authenticate, createToken, hashPassword, verifyPassword, type AuthUser } from './auth.ts';
+import { authenticate, createToken, hashPassword, hashToken, verifyPassword, type AuthUser } from './auth.ts';
 import type { AppOptions } from './config.ts';
 import { openDatabase } from './database.ts';
 import { AppError, errorBody } from './errors.ts';
+import { buildOtpauthUri, generateTotpSecret, verifyTotp } from './totp.ts';
 
 interface MatchRow {
   id: string;
@@ -545,6 +546,31 @@ const loginSchema = z.object({
   password: z.string().min(1).max(100),
 }).strict();
 
+const profileSchema = z.object({
+  displayName: z.string().trim().min(2).max(40).optional(),
+  phone: z.union([z.string().trim().max(30), z.null()]).optional(),
+}).strict().refine((value) => value.displayName !== undefined || value.phone !== undefined, {
+  message: 'At least one profile field is required',
+});
+
+const passwordChangeSchema = z.object({
+  currentPassword: z.string().min(1).max(100),
+  newPassword: z.string().min(6).max(100),
+}).strict();
+
+const twoFactorSetupSchema = z.object({
+  password: z.string().min(1).max(100),
+}).strict();
+
+const twoFactorCodeSchema = z.object({
+  code: z.string().trim().regex(/^\d{6}$/),
+}).strict();
+
+const twoFactorLoginSchema = z.object({
+  challengeToken: z.string().min(20).max(256),
+  code: z.string().trim().regex(/^\d{6}$/),
+}).strict();
+
 const filterSchema = z.object({
   filter: z.enum(['all', 'live', 'upcoming']).default('all'),
 }).strict();
@@ -571,6 +597,36 @@ function parse<T>(schema: ZodType<T>, input: unknown): T {
     throw new AppError(400, 'VALIDATION_ERROR', 'Invalid request data');
   }
   return result.data;
+}
+
+interface UserProfileRow {
+  id: string;
+  displayName: string;
+  email: string | null;
+  phone: string | null;
+  twoFactorEnabled: number;
+  balance: number;
+}
+
+function normalizeMoroccanPhone(input: string): string {
+  let value = input.replace(/[\s().-]/g, '');
+  if (value.startsWith('00')) value = `+${value.slice(2)}`;
+  if (value.startsWith('0')) value = `+212${value.slice(1)}`;
+  if (value.startsWith('212')) value = `+${value}`;
+  if (!/^\+212[5-7]\d{8}$/.test(value)) {
+    throw new AppError(400, 'INVALID_PHONE', 'Numéro marocain invalide (ex: 06 12 34 56 78)');
+  }
+  return value;
+}
+
+function publicUser(row: UserProfileRow) {
+  return {
+    id: row.id,
+    displayName: row.displayName,
+    email: row.email,
+    phone: row.phone,
+    twoFactorEnabled: Boolean(row.twoFactorEnabled),
+  };
 }
 
 function publicMatch(raw: MatchRow) {
@@ -644,17 +700,12 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     const body = parse(demoSchema, request.body ?? {});
     const id = randomUUID();
     const displayName = body.displayName ?? 'Demo Fan';
-    const { token, hash } = createToken();
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + tokenTtlHours * 60 * 60 * 1000).toISOString();
-    const createdAt = now.toISOString();
+    const createdAt = new Date().toISOString();
 
     db.exec('BEGIN IMMEDIATE');
     try {
       db.prepare('INSERT INTO users (id, display_name, balance, created_at) VALUES (?, ?, 1000, ?)')
         .run(id, displayName, createdAt);
-      db.prepare('INSERT INTO auth_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
-        .run(hash, id, expiresAt, createdAt);
       db.prepare(`INSERT INTO wallet_transactions
         (id, user_id, type, amount, balance_after, description, created_at)
         VALUES (?, ?, 'CREDIT', 1000, 1000, 'Welcome virtual credits', ?)`)
@@ -665,18 +716,23 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
       throw error;
     }
 
-    return reply.code(201).send({ token, user: { id, displayName }, balance: 1000 });
+    return reply.code(201).send(createSessionForUser(id));
   });
 
-  function createSessionForUser(userId: string, displayName: string, email?: string | null) {
+  function createSessionForUser(userId: string) {
+    const userRow = db.prepare(`
+      SELECT id, display_name AS displayName, email, phone, two_factor_enabled AS twoFactorEnabled, balance
+      FROM users WHERE id = ?
+    `).get(userId) as UserProfileRow | undefined;
+    if (!userRow) throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+
     const { token, hash } = createToken();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + tokenTtlHours * 60 * 60 * 1000).toISOString();
     const createdAt = now.toISOString();
     db.prepare('INSERT INTO auth_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
       .run(hash, userId, expiresAt, createdAt);
-    const userRow = db.prepare('SELECT balance FROM users WHERE id = ?').get(userId) as { balance: number } | undefined;
-    return { token, user: { id: userId, displayName, ...(email ? { email } : {}) }, balance: userRow?.balance ?? 0 };
+    return { token, user: publicUser(userRow), balance: userRow.balance };
   }
 
   app.post('/api/v1/auth/signup', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -702,22 +758,222 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
       throw error;
     }
 
-    const session = createSessionForUser(id, body.displayName, body.email);
+    const session = createSessionForUser(id);
     return reply.code(201).send(session);
   });
 
   app.post('/api/v1/auth/login', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
     const body = parse(loginSchema, request.body ?? {});
-    const user = db.prepare('SELECT id, display_name AS displayName, email, password_hash AS passwordHash, balance FROM users WHERE email = ?')
-      .get(body.email) as { id: string; displayName: string; email: string | null; passwordHash: string | null; balance: number } | undefined;
+    const user = db.prepare(`
+      SELECT id, display_name AS displayName, email, password_hash AS passwordHash, balance,
+             two_factor_enabled AS twoFactorEnabled, two_factor_secret AS twoFactorSecret
+      FROM users WHERE email = ?
+    `).get(body.email) as {
+      id: string; displayName: string; email: string | null; passwordHash: string | null; balance: number;
+      twoFactorEnabled: number; twoFactorSecret: string | null;
+    } | undefined;
     if (!user || !user.passwordHash || !verifyPassword(body.password, user.passwordHash)) {
       throw new AppError(401, 'INVALID_CREDENTIALS', 'Email ou mot de passe incorrect');
     }
-    const session = createSessionForUser(user.id, user.displayName, user.email);
-    return reply.send(session);
+
+    if (user.twoFactorEnabled && user.twoFactorSecret) {
+      const { token, hash } = createToken();
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 5 * 60 * 1000).toISOString();
+      db.prepare('DELETE FROM two_factor_challenges WHERE user_id = ? OR expires_at <= ?')
+        .run(user.id, now.toISOString());
+      db.prepare(`INSERT INTO two_factor_challenges (token_hash, user_id, expires_at, created_at)
+        VALUES (?, ?, ?, ?)`)
+        .run(hash, user.id, expiresAt, now.toISOString());
+      return reply.send({ requiresTwoFactor: true, challengeToken: token });
+    }
+
+    return reply.send(createSessionForUser(user.id));
+  });
+
+  app.post('/api/v1/auth/login/2fa', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request) => {
+    const body = parse(twoFactorLoginSchema, request.body ?? {});
+    const challengeHash = hashToken(body.challengeToken);
+    const challenge = db.prepare(`
+      SELECT c.user_id AS userId, c.expires_at AS expiresAt, c.attempts,
+             u.two_factor_enabled AS twoFactorEnabled, u.two_factor_secret AS twoFactorSecret
+      FROM two_factor_challenges c
+      JOIN users u ON u.id = c.user_id
+      WHERE c.token_hash = ?
+    `).get(challengeHash) as {
+      userId: string; expiresAt: string; attempts: number;
+      twoFactorEnabled: number; twoFactorSecret: string | null;
+    } | undefined;
+
+    if (!challenge || challenge.expiresAt <= new Date().toISOString()
+      || !challenge.twoFactorEnabled || !challenge.twoFactorSecret) {
+      throw new AppError(401, 'INVALID_2FA_CHALLENGE', 'Session de vérification expirée, reconnectez-vous');
+    }
+    if (challenge.attempts >= 5) {
+      db.prepare('DELETE FROM two_factor_challenges WHERE token_hash = ?').run(challengeHash);
+      throw new AppError(429, 'TOO_MANY_2FA_ATTEMPTS', 'Trop de tentatives, reconnectez-vous');
+    }
+    if (!verifyTotp(challenge.twoFactorSecret, body.code)) {
+      db.prepare('UPDATE two_factor_challenges SET attempts = attempts + 1 WHERE token_hash = ?').run(challengeHash);
+      throw new AppError(401, 'INVALID_2FA_CODE', 'Code de vérification incorrect');
+    }
+
+    db.prepare('DELETE FROM two_factor_challenges WHERE token_hash = ?').run(challengeHash);
+    return createSessionForUser(challenge.userId);
   });
 
   const auth = authenticate(db);
+
+  function profileRowFor(userId: string): UserProfileRow {
+    const row = db.prepare(`
+      SELECT id, display_name AS displayName, email, phone, two_factor_enabled AS twoFactorEnabled, balance
+      FROM users WHERE id = ?
+    `).get(userId) as UserProfileRow | undefined;
+    if (!row) throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+    return row;
+  }
+
+  app.get('/api/v1/profile', { preHandler: auth }, async (request) => {
+    const row = profileRowFor(request.user.id);
+    return { user: publicUser(row), balance: row.balance };
+  });
+
+  app.post('/api/v1/profile', { preHandler: auth }, async (request) => {
+    const body = parse(profileSchema, request.body ?? {});
+    const updates: string[] = [];
+    const values: (string | null)[] = [];
+
+    if (body.displayName !== undefined) {
+      updates.push('display_name = ?');
+      values.push(body.displayName);
+    }
+    if (body.phone !== undefined) {
+      const phone = body.phone && body.phone.length > 0 ? normalizeMoroccanPhone(body.phone) : null;
+      updates.push('phone = ?');
+      values.push(phone);
+    }
+    if (updates.length === 0) {
+      throw new AppError(400, 'NO_CHANGES', 'Aucune modification fournie');
+    }
+
+    db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values, request.user.id);
+    return { user: publicUser(profileRowFor(request.user.id)) };
+  });
+
+  app.post('/api/v1/profile/password', {
+    preHandler: auth,
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (request) => {
+    const body = parse(passwordChangeSchema, request.body ?? {});
+    const user = db.prepare('SELECT password_hash AS passwordHash FROM users WHERE id = ?')
+      .get(request.user.id) as { passwordHash: string | null } | undefined;
+    if (!user?.passwordHash) {
+      throw new AppError(400, 'PASSWORD_NOT_SET', 'Ce compte de démonstration n’a pas de mot de passe');
+    }
+    if (!verifyPassword(body.currentPassword, user.passwordHash)) {
+      throw new AppError(400, 'INVALID_PASSWORD', 'Mot de passe actuel incorrect');
+    }
+    if (body.currentPassword === body.newPassword) {
+      throw new AppError(400, 'SAME_PASSWORD', 'Le nouveau mot de passe doit être différent');
+    }
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+        .run(hashPassword(body.newPassword), request.user.id);
+      // Keep the current session but revoke every other token and pending 2FA challenge.
+      db.prepare('DELETE FROM auth_tokens WHERE user_id = ? AND token_hash != ?')
+        .run(request.user.id, request.user.tokenHash);
+      db.prepare('DELETE FROM two_factor_challenges WHERE user_id = ?').run(request.user.id);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+
+    return { ok: true };
+  });
+
+  app.post('/api/v1/profile/2fa/setup', {
+    preHandler: auth,
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (request) => {
+    const body = parse(twoFactorSetupSchema, request.body ?? {});
+    const user = db.prepare(`
+      SELECT display_name AS displayName, email, password_hash AS passwordHash, two_factor_enabled AS twoFactorEnabled
+      FROM users WHERE id = ?
+    `).get(request.user.id) as {
+      displayName: string; email: string | null; passwordHash: string | null; twoFactorEnabled: number;
+    } | undefined;
+    if (!user?.passwordHash) {
+      throw new AppError(400, 'PASSWORD_NOT_SET', 'La 2FA nécessite un compte avec mot de passe');
+    }
+    if (user.twoFactorEnabled) {
+      throw new AppError(409, '2FA_ALREADY_ENABLED', 'La double authentification est déjà activée');
+    }
+    if (!verifyPassword(body.password, user.passwordHash)) {
+      throw new AppError(400, 'INVALID_PASSWORD', 'Mot de passe incorrect');
+    }
+
+    const secret = generateTotpSecret();
+    db.prepare('UPDATE users SET two_factor_secret = ?, two_factor_enabled = 0 WHERE id = ?')
+      .run(secret, request.user.id);
+
+    return {
+      secret,
+      otpauthUri: buildOtpauthUri(secret, user.email ?? user.displayName),
+    };
+  });
+
+  app.post('/api/v1/profile/2fa/enable', {
+    preHandler: auth,
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (request) => {
+    const body = parse(twoFactorCodeSchema, request.body ?? {});
+    const user = db.prepare(`
+      SELECT two_factor_enabled AS twoFactorEnabled, two_factor_secret AS twoFactorSecret
+      FROM users WHERE id = ?
+    `).get(request.user.id) as { twoFactorEnabled: number; twoFactorSecret: string | null } | undefined;
+    if (!user?.twoFactorSecret || user.twoFactorEnabled) {
+      throw new AppError(409, '2FA_NOT_IN_SETUP', 'Aucune configuration 2FA en attente');
+    }
+    if (!verifyTotp(user.twoFactorSecret, body.code)) {
+      throw new AppError(400, 'INVALID_2FA_CODE', 'Code de vérification incorrect');
+    }
+
+    db.prepare('UPDATE users SET two_factor_enabled = 1 WHERE id = ?').run(request.user.id);
+    return { twoFactorEnabled: true };
+  });
+
+  app.post('/api/v1/profile/2fa/disable', {
+    preHandler: auth,
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (request) => {
+    const body = parse(twoFactorSetupSchema, request.body ?? {});
+    const user = db.prepare(`
+      SELECT password_hash AS passwordHash, two_factor_enabled AS twoFactorEnabled
+      FROM users WHERE id = ?
+    `).get(request.user.id) as { passwordHash: string | null; twoFactorEnabled: number } | undefined;
+    if (!user?.twoFactorEnabled) {
+      throw new AppError(409, '2FA_NOT_ENABLED', 'La double authentification n’est pas activée');
+    }
+    if (!user.passwordHash || !verifyPassword(body.password, user.passwordHash)) {
+      throw new AppError(400, 'INVALID_PASSWORD', 'Mot de passe incorrect');
+    }
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE users SET two_factor_enabled = 0, two_factor_secret = NULL WHERE id = ?')
+        .run(request.user.id);
+      db.prepare('DELETE FROM two_factor_challenges WHERE user_id = ?').run(request.user.id);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+
+    return { twoFactorEnabled: false };
+  });
 
   app.get('/api/v1/matches', { preHandler: auth }, async (request) => {
     const { filter } = parse(filterSchema, request.query);

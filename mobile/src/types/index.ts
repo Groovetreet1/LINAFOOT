@@ -110,7 +110,14 @@ export interface WalletTransaction {
 export interface User {
   id: string;
   displayName: string;
-  email?: string;
+  email?: string | null;
+  phone?: string | null;
+  twoFactorEnabled?: boolean;
+}
+
+export interface LoginResult {
+  requiresTwoFactor: boolean;
+  challengeToken?: string;
 }
 
 export interface SelectedOutcome {

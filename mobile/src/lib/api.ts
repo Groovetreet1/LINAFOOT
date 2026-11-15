@@ -38,7 +38,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
     const payload = (await response.json().catch(() => ({}))) as T & ApiErrorShape;
     if (!response.ok) {
-      if (response.status === 401) {
+      if (response.status === 401 && options.token) {
         throw new ApiError('Session expirée. Reconnectez-vous.', 'UNAUTHORIZED', 401);
       }
       throw new ApiError(

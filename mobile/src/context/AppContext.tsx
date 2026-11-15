@@ -5,6 +5,7 @@ import { deleteSessionItem, getSessionItem, setSessionItem } from '@/lib/session
 import type {
   Bet,
   FootballMatch,
+  LoginResult,
   SelectedOutcome,
   SelectionId,
   User,
@@ -13,6 +14,12 @@ import type {
 
 const TOKEN_KEY = 'linafoot.session';
 const USER_KEY = 'linafoot.user';
+
+interface AuthResponse {
+  token: string;
+  user: User;
+  balance: number;
+}
 
 interface AppContextValue {
   token: string | null;
@@ -25,13 +32,19 @@ interface AppContextValue {
   isRestoring: boolean;
   isRefreshing: boolean;
   signIn: (displayName: string) => Promise<void>;
-  login: (email: string, password: string, remember?: boolean) => Promise<void>;
+  login: (email: string, password: string, remember?: boolean) => Promise<LoginResult>;
   signup: (displayName: string, email: string, password: string) => Promise<void>;
+  verifyTwoFactorLogin: (challengeToken: string, code: string, remember?: boolean) => Promise<void>;
   logout: () => Promise<void>;
   refreshData: () => Promise<void>;
   selectOutcome: (match: FootballMatch, selectionId: SelectionId) => void;
   clearSelection: () => void;
   placeBet: (stake: number, idempotencyKey: string) => Promise<Bet>;
+  updateProfile: (input: { displayName?: string; phone?: string | null }) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  startTwoFactorSetup: (password: string) => Promise<{ secret: string; otpauthUri: string }>;
+  enableTwoFactor: (code: string) => Promise<void>;
+  disableTwoFactor: (password: string) => Promise<void>;
   isBettableSelection: (selectionId: string) => selectionId is SelectionId;
 }
 
@@ -62,33 +75,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelected(null);
   }, []);
 
+  const persistUser = useCallback(async (nextUser: User) => {
+    setUser(nextUser);
+    try {
+      const storedToken = await getSessionItem(TOKEN_KEY);
+      if (storedToken) await setSessionItem(USER_KEY, JSON.stringify(nextUser));
+    } catch {
+      // Caching the profile locally is best-effort only.
+    }
+  }, []);
+
   const loadAccount = useCallback(async (sessionToken: string) => {
-    const [walletResponse, betsResponse] = await Promise.all([
+    const [walletResponse, betsResponse, profileResponse] = await Promise.all([
       apiRequest<{ balance: number; transactions: WalletTransaction[] }>('/wallet', {
         token: sessionToken,
       }),
       apiRequest<{ bets: Bet[] }>('/bets', { token: sessionToken }),
+      apiRequest<{ user: User }>('/profile', { token: sessionToken }),
     ]);
     setBalance(walletResponse.balance);
     setTransactions(walletResponse.transactions);
     setBets(betsResponse.bets);
-  }, []);
+    await persistUser(profileResponse.user);
+  }, [persistUser]);
 
   useEffect(() => {
     let active = true;
 
     async function restore() {
       try {
-        const [storedToken, storedUser] = await Promise.all([
-          getSessionItem(TOKEN_KEY),
-          getSessionItem(USER_KEY),
-        ]);
+        const storedToken = await getSessionItem(TOKEN_KEY);
         if (storedToken) {
           await loadAccount(storedToken);
-          if (active) {
-            setToken(storedToken);
-            if (storedUser) setUser(JSON.parse(storedUser) as User);
-          }
+          if (active) setToken(storedToken);
         }
       } catch (error) {
         if (error instanceof ApiError && error.status === 401) {
@@ -105,7 +124,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [clearLocalSession, loadAccount]);
 
-  const applyAuth = useCallback(async (response: { token: string; user: User; balance: number }, remember = true) => {
+  const applyAuth = useCallback(async (response: AuthResponse, remember = true) => {
     if (remember) {
       await Promise.all([
         setSessionItem(TOKEN_KEY, response.token),
@@ -129,23 +148,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn = useCallback(async (displayName: string) => {
-    const response = await apiRequest<{ token: string; user: User; balance: number }>('/auth/demo', {
+    const response = await apiRequest<AuthResponse>('/auth/demo', {
       method: 'POST',
       body: { displayName },
     });
     await applyAuth(response);
   }, [applyAuth]);
 
-  const login = useCallback(async (email: string, password: string, remember = true) => {
-    const response = await apiRequest<{ token: string; user: User; balance: number }>('/auth/login', {
+  const login = useCallback(async (email: string, password: string, remember = true): Promise<LoginResult> => {
+    const response = await apiRequest<AuthResponse | { requiresTwoFactor: true; challengeToken: string }>('/auth/login', {
       method: 'POST',
       body: { email, password },
+    });
+    if ('requiresTwoFactor' in response) {
+      return { requiresTwoFactor: true, challengeToken: response.challengeToken };
+    }
+    await applyAuth(response, remember);
+    return { requiresTwoFactor: false };
+  }, [applyAuth]);
+
+  const verifyTwoFactorLogin = useCallback(async (challengeToken: string, code: string, remember = true) => {
+    const response = await apiRequest<AuthResponse>('/auth/login/2fa', {
+      method: 'POST',
+      body: { challengeToken, code },
     });
     await applyAuth(response, remember);
   }, [applyAuth]);
 
   const signup = useCallback(async (displayName: string, email: string, password: string) => {
-    const response = await apiRequest<{ token: string; user: User; balance: number }>('/auth/signup', {
+    const response = await apiRequest<AuthResponse>('/auth/signup', {
       method: 'POST',
       body: { displayName, email, password },
     });
@@ -205,6 +236,54 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const isBettableSelection = (selectionId: string): selectionId is SelectionId =>
     selectionId === 'home' || selectionId === 'draw' || selectionId === 'away';
 
+  const updateProfile = useCallback(async (input: { displayName?: string; phone?: string | null }) => {
+    if (!token) throw new Error('Session expirée, reconnectez-vous.');
+    const response = await apiRequest<{ user: User }>('/profile', {
+      method: 'POST',
+      token,
+      body: input,
+    });
+    await persistUser(response.user);
+  }, [persistUser, token]);
+
+  const changePassword = useCallback(async (currentPassword: string, newPassword: string) => {
+    if (!token) throw new Error('Session expirée, reconnectez-vous.');
+    await apiRequest<{ ok: boolean }>('/profile/password', {
+      method: 'POST',
+      token,
+      body: { currentPassword, newPassword },
+    });
+  }, [token]);
+
+  const startTwoFactorSetup = useCallback(async (password: string) => {
+    if (!token) throw new Error('Session expirée, reconnectez-vous.');
+    return apiRequest<{ secret: string; otpauthUri: string }>('/profile/2fa/setup', {
+      method: 'POST',
+      token,
+      body: { password },
+    });
+  }, [token]);
+
+  const enableTwoFactor = useCallback(async (code: string) => {
+    if (!token) throw new Error('Session expirée, reconnectez-vous.');
+    await apiRequest<{ twoFactorEnabled: boolean }>('/profile/2fa/enable', {
+      method: 'POST',
+      token,
+      body: { code },
+    });
+    if (user) await persistUser({ ...user, twoFactorEnabled: true });
+  }, [persistUser, token, user]);
+
+  const disableTwoFactor = useCallback(async (password: string) => {
+    if (!token) throw new Error('Session expirée, reconnectez-vous.');
+    await apiRequest<{ twoFactorEnabled: boolean }>('/profile/2fa/disable', {
+      method: 'POST',
+      token,
+      body: { password },
+    });
+    if (user) await persistUser({ ...user, twoFactorEnabled: false });
+  }, [persistUser, token, user]);
+
   const value = useMemo<AppContextValue>(
     () => ({
       token,
@@ -219,11 +298,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       signIn,
       login,
       signup,
+      verifyTwoFactorLogin,
       logout: clearLocalSession,
       refreshData,
       selectOutcome,
       clearSelection: () => setSelected(null),
       placeBet,
+      updateProfile,
+      changePassword,
+      startTwoFactorSetup,
+      enableTwoFactor,
+      disableTwoFactor,
       isBettableSelection,
     }),
     [
@@ -239,10 +324,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       signIn,
       login,
       signup,
+      verifyTwoFactorLogin,
       clearLocalSession,
       refreshData,
       selectOutcome,
       placeBet,
+      updateProfile,
+      changePassword,
+      startTwoFactorSetup,
+      enableTwoFactor,
+      disableTwoFactor,
     ],
   );
 
