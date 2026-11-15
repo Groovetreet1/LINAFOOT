@@ -76,7 +76,7 @@ export default function WelcomeScreen() {
           <AnimatedBrand />
           <View style={styles.hero}>
             <View style={styles.badge}><Ionicons name="shield-checkmark" size={14} color={colors.accent} /><Text style={styles.badgeText}>Crédits virtuels uniquement</Text></View>
-            <Text style={styles.title}>LINAFOOT Sandbox</Text>
+            <Text style={styles.title}>LINAFOOT</Text>
             <Text style={styles.subtitle}>Connectez-vous ou créez un compte pour accéder aux matchs, paris simulés et votre portefeuille virtuel (aucun argent réel).</Text>
           </View>
 
@@ -124,7 +124,7 @@ export default function WelcomeScreen() {
 
           <View style={styles.notice}>
             <Ionicons name="information-circle-outline" size={18} color={colors.muted} />
-            <Text style={styles.noticeText}>Démo sandbox : crédits virtuels uniquement, aucun paiement réel. Vos identifiants sont stockés localement dans la base de données de l’app.</Text>
+            <Text style={styles.noticeText}>Démo : crédits virtuels uniquement, aucun paiement réel. Vos identifiants sont stockés localement dans la base de données de l’app.</Text>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
