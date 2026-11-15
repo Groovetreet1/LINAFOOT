@@ -4,7 +4,7 @@ import helmet from '@fastify/helmet';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { z, type ZodType } from 'zod';
-import { authenticate, createToken, type AuthUser } from './auth.ts';
+import { authenticate, createToken, hashPassword, verifyPassword, type AuthUser } from './auth.ts';
 import type { AppOptions } from './config.ts';
 import { openDatabase } from './database.ts';
 import { AppError, errorBody } from './errors.ts';
@@ -534,6 +534,17 @@ const demoSchema = z.object({
   displayName: z.string().trim().min(1).max(40).optional(),
 }).strict();
 
+const signupSchema = z.object({
+  displayName: z.string().trim().min(2).max(40),
+  email: z.string().trim().toLowerCase().email().max(120),
+  password: z.string().min(6).max(100),
+}).strict();
+
+const loginSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(120),
+  password: z.string().min(1).max(100),
+}).strict();
+
 const filterSchema = z.object({
   filter: z.enum(['all', 'live', 'upcoming']).default('all'),
 }).strict();
@@ -655,6 +666,55 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     }
 
     return reply.code(201).send({ token, user: { id, displayName }, balance: 1000 });
+  });
+
+  function createSessionForUser(userId: string, displayName: string, email?: string | null) {
+    const { token, hash } = createToken();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + tokenTtlHours * 60 * 60 * 1000).toISOString();
+    const createdAt = now.toISOString();
+    db.prepare('INSERT INTO auth_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
+      .run(hash, userId, expiresAt, createdAt);
+    const userRow = db.prepare('SELECT balance FROM users WHERE id = ?').get(userId) as { balance: number } | undefined;
+    return { token, user: { id: userId, displayName, ...(email ? { email } : {}) }, balance: userRow?.balance ?? 0 };
+  }
+
+  app.post('/api/v1/auth/signup', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const body = parse(signupSchema, request.body ?? {});
+    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(body.email) as { id: string } | undefined;
+    if (existing) throw new AppError(409, 'EMAIL_TAKEN', 'Cet email est déjà utilisé');
+
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    const passwordHash = hashPassword(body.password);
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('INSERT INTO users (id, display_name, email, password_hash, balance, created_at) VALUES (?, ?, ?, ?, 1000, ?)')
+        .run(id, body.displayName, body.email, passwordHash, createdAt);
+      db.prepare(`INSERT INTO wallet_transactions
+        (id, user_id, type, amount, balance_after, description, created_at)
+        VALUES (?, ?, 'CREDIT', 1000, 1000, 'Crédits de bienvenue', ?)`)
+        .run(randomUUID(), id, createdAt);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+
+    const session = createSessionForUser(id, body.displayName, body.email);
+    return reply.code(201).send(session);
+  });
+
+  app.post('/api/v1/auth/login', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const body = parse(loginSchema, request.body ?? {});
+    const user = db.prepare('SELECT id, display_name AS displayName, email, password_hash AS passwordHash, balance FROM users WHERE email = ?')
+      .get(body.email) as { id: string; displayName: string; email: string | null; passwordHash: string | null; balance: number } | undefined;
+    if (!user || !user.passwordHash || !verifyPassword(body.password, user.passwordHash)) {
+      throw new AppError(401, 'INVALID_CREDENTIALS', 'Email ou mot de passe incorrect');
+    }
+    const session = createSessionForUser(user.id, user.displayName, user.email);
+    return reply.send(session);
   });
 
   const auth = authenticate(db);

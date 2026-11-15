@@ -12,7 +12,7 @@ import type {
 } from '@/types';
 
 const TOKEN_KEY = 'linafoot.session';
-const USER_KEY = 'linafoot.demo-user';
+const USER_KEY = 'linafoot.user';
 
 interface AppContextValue {
   token: string | null;
@@ -25,6 +25,8 @@ interface AppContextValue {
   isRestoring: boolean;
   isRefreshing: boolean;
   signIn: (displayName: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  signup: (displayName: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshData: () => Promise<void>;
   selectOutcome: (match: FootballMatch, selectionId: SelectionId) => void;
@@ -103,11 +105,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [clearLocalSession, loadAccount]);
 
-  const signIn = useCallback(async (displayName: string) => {
-    const response = await apiRequest<{ token: string; user: User; balance: number }>('/auth/demo', {
-      method: 'POST',
-      body: { displayName },
-    });
+  const applyAuth = useCallback(async (response: { token: string; user: User; balance: number }) => {
     await Promise.all([
       setSessionItem(TOKEN_KEY, response.token),
       setSessionItem(USER_KEY, JSON.stringify(response.user)),
@@ -118,7 +116,32 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setBets([]);
     setTransactions([]);
     setMatches([]);
+    setSelected(null);
   }, []);
+
+  const signIn = useCallback(async (displayName: string) => {
+    const response = await apiRequest<{ token: string; user: User; balance: number }>('/auth/demo', {
+      method: 'POST',
+      body: { displayName },
+    });
+    await applyAuth(response);
+  }, [applyAuth]);
+
+  const login = useCallback(async (email: string, password: string) => {
+    const response = await apiRequest<{ token: string; user: User; balance: number }>('/auth/login', {
+      method: 'POST',
+      body: { email, password },
+    });
+    await applyAuth(response);
+  }, [applyAuth]);
+
+  const signup = useCallback(async (displayName: string, email: string, password: string) => {
+    const response = await apiRequest<{ token: string; user: User; balance: number }>('/auth/signup', {
+      method: 'POST',
+      body: { displayName, email, password },
+    });
+    await applyAuth(response);
+  }, [applyAuth]);
 
   const refreshData = useCallback(async () => {
     if (!token) return;
@@ -185,6 +208,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       isRestoring,
       isRefreshing,
       signIn,
+      login,
+      signup,
       logout: clearLocalSession,
       refreshData,
       selectOutcome,
@@ -203,6 +228,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       isRestoring,
       isRefreshing,
       signIn,
+      login,
+      signup,
       clearLocalSession,
       refreshData,
       selectOutcome,

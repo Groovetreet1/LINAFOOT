@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppHeader } from '@/components/AppHeader';
@@ -12,6 +11,7 @@ import { formatDate } from '@/lib/format';
 export default function AccountScreen() {
   const { user, balance, transactions, isRefreshing, refreshData, logout } = useApp();
   const [error, setError] = useState('');
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
 
   async function refresh() {
     try {
@@ -22,9 +22,15 @@ export default function AccountScreen() {
     }
   }
 
+  function confirmSignOut() {
+    setConfirmingLogout(true);
+  }
+
   async function signOut() {
+    setConfirmingLogout(false);
+    // Clearing the token makes the root Stack.Protected guard remove the whole
+    // (tabs) stack, so expo-router lands on the login screen automatically.
     await logout();
-    router.replace('/');
   }
 
   return (
@@ -35,13 +41,13 @@ export default function AccountScreen() {
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={refresh} tintColor={colors.accent} colors={[colors.accent]} progressBackgroundColor={colors.surface} />}
       >
         <Text style={styles.eyebrow}>MON ESPACE</Text>
-        <Text style={styles.title}>Compte démo</Text>
+        <Text style={styles.title}>Mon compte</Text>
 
         <View style={styles.profileCard}>
           <View style={styles.avatar}><Text style={styles.avatarText}>{(user?.displayName ?? 'Joueur Atlas').slice(0, 2).toUpperCase()}</Text></View>
           <View style={styles.profileInfo}>
             <Text style={styles.name}>{user?.displayName ?? 'Joueur Atlas'}</Text>
-            <Text style={styles.profileMeta}>Profil de simulation local</Text>
+            <Text style={styles.profileMeta}>{user?.email ?? 'Compte LINAFOOT'}</Text>
           </View>
           <View style={styles.ageBadge}><Text style={styles.ageText}>18+</Text></View>
         </View>
@@ -75,12 +81,46 @@ export default function AccountScreen() {
         </View>
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        <Pressable style={styles.logoutButton} onPress={signOut}>
+        <Pressable style={styles.logoutButton} onPress={confirmSignOut} testID="logout-button">
           <Ionicons name="log-out-outline" size={19} color={colors.live} />
-          <Text style={styles.logoutText}>FERMER LA SESSION DÉMO</Text>
+          <Text style={styles.logoutText}>DÉCONNEXION</Text>
         </Pressable>
-        <Text style={styles.version}>ATLASFOOT SANDBOX · VERSION 0.1.0</Text>
+        <Text style={styles.version}>ATLASFOOT SANDBOX · VERSION 0.2.0</Text>
       </ScrollView>
+
+      <Modal
+        visible={confirmingLogout}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmingLogout(false)}
+      >
+        <View style={styles.modalRoot}>
+          <Pressable style={styles.backdrop} onPress={() => setConfirmingLogout(false)} />
+          <View style={styles.dialog}>
+            <View style={styles.dialogIcon}>
+              <Ionicons name="log-out-outline" size={24} color={colors.live} />
+            </View>
+            <Text style={styles.dialogTitle}>Déconnexion</Text>
+            <Text style={styles.dialogMessage}>Êtes-vous sûr de vouloir vous déconnecter ?</Text>
+            <View style={styles.dialogActions}>
+              <Pressable
+                style={[styles.dialogButton, styles.cancelButton]}
+                onPress={() => setConfirmingLogout(false)}
+                testID="logout-cancel"
+              >
+                <Text style={styles.cancelText}>Annuler</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.dialogButton, styles.confirmButton]}
+                onPress={signOut}
+                testID="logout-confirm"
+              >
+                <Text style={styles.confirmText}>Oui, me déconnecter</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -133,4 +173,16 @@ const styles = StyleSheet.create({
   logoutButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, borderWidth: 1, borderColor: '#50303A', backgroundColor: '#25171E', borderRadius: radius.medium, paddingVertical: 16, marginTop: 24 },
   logoutText: { color: colors.live, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
   version: { color: colors.muted, fontSize: 8, letterSpacing: 1, textAlign: 'center', marginTop: 20 },
+  modalRoot: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  backdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(0,0,0,0.65)' },
+  dialog: { width: '100%', maxWidth: 360, backgroundColor: colors.surface, borderRadius: radius.large, borderWidth: 1, borderColor: colors.border, padding: 22 },
+  dialogIcon: { width: 46, height: 46, borderRadius: 15, backgroundColor: '#25171E', alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  dialogTitle: { color: colors.text, fontSize: 19, fontWeight: '900' },
+  dialogMessage: { color: colors.muted, fontSize: 13, lineHeight: 20, marginTop: 8 },
+  dialogActions: { flexDirection: 'row', gap: 10, marginTop: 22 },
+  dialogButton: { flex: 1, minHeight: 46, borderRadius: radius.medium, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  cancelButton: { backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.border },
+  confirmButton: { backgroundColor: colors.live },
+  cancelText: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  confirmText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
 });

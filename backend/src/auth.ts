@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import { AppError } from './errors.ts';
@@ -21,6 +21,21 @@ export function hashToken(token: string): string {
 export function createToken(): { token: string; hash: string } {
   const token = randomBytes(32).toString('base64url');
   return { token, hash: hashToken(token) };
+}
+
+export function hashPassword(password: string): string {
+  const salt = randomBytes(16).toString('hex');
+  const derived = scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+export function verifyPassword(password: string, stored: string): boolean {
+  const [salt, key] = stored.split(':');
+  if (!salt || !key) return false;
+  const derived = scryptSync(password, salt, 64);
+  const keyBuf = Buffer.from(key, 'hex');
+  if (keyBuf.length !== derived.length) return false;
+  return timingSafeEqual(derived, keyBuf);
 }
 
 export function authenticate(db: DatabaseSync) {

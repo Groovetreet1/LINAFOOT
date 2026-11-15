@@ -51,6 +51,8 @@ export function openDatabase(databasePath: string): DatabaseSync {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       display_name TEXT NOT NULL,
+      email TEXT,
+      password_hash TEXT,
       balance INTEGER NOT NULL CHECK (balance >= 0),
       created_at TEXT NOT NULL
     ) STRICT;
@@ -117,6 +119,7 @@ export function openDatabase(databasePath: string): DatabaseSync {
 
   migrateMatches(db);
   migrateBets(db);
+  migrateUsers(db);
   seedMatches(db);
   return db;
 }
@@ -171,6 +174,12 @@ function migrateBets(db: DatabaseSync): void {
     COMMIT;
     PRAGMA foreign_keys = ON;
   `);
+}
+
+function migrateUsers(db: DatabaseSync): void {
+  if (!hasColumn(db, 'users', 'email')) db.exec(`ALTER TABLE users ADD COLUMN email TEXT`);
+  if (!hasColumn(db, 'users', 'password_hash')) db.exec(`ALTER TABLE users ADD COLUMN password_hash TEXT`);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL`);
 }
 
 function seedMatches(db: DatabaseSync): void {

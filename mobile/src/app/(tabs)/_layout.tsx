@@ -1,10 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Redirect, Tabs } from 'expo-router';
+import { Tabs } from 'expo-router';
 import { useState } from 'react';
 import { Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, radius } from '@/constants/theme';
-import { useApp } from '@/context/AppContext';
 
 function SupportPopup({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   return (
@@ -51,9 +50,7 @@ function SupportPopup({ visible, onClose }: { visible: boolean; onClose: () => v
 }
 
 export default function TabLayout() {
-  const { token, isRestoring } = useApp();
   const [supportOpen, setSupportOpen] = useState(false);
-  if (!isRestoring && !token) return <Redirect href="/" />;
 
   return (
     <View style={{ flex: 1 }}>
@@ -75,7 +72,7 @@ export default function TabLayout() {
         }}
       >
         <Tabs.Screen
-          name="index"
+          name="matches"
           options={{
             title: 'Matchs',
             tabBarIcon: ({ color, size }) => <Ionicons name="football-outline" color={color as string} size={size} />,

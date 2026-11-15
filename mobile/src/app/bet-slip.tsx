@@ -21,7 +21,7 @@ export default function BetSlipScreen() {
   const idempotencyKey = useRef(createIdempotencyKey());
 
   if (!token) return <Redirect href="/" />;
-  if (!selected) return <Redirect href="/(tabs)" />;
+  if (!selected) return <Redirect href="/(tabs)/matches" />;
 
   const numericStake = /^\d+$/.test(stake) ? Number(stake) : 0;
   const validStake = numericStake >= 10 && numericStake <= balance;
