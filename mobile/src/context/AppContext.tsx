@@ -25,7 +25,7 @@ interface AppContextValue {
   isRestoring: boolean;
   isRefreshing: boolean;
   signIn: (displayName: string) => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, remember?: boolean) => Promise<void>;
   signup: (displayName: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshData: () => Promise<void>;
@@ -105,11 +105,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [clearLocalSession, loadAccount]);
 
-  const applyAuth = useCallback(async (response: { token: string; user: User; balance: number }) => {
-    await Promise.all([
-      setSessionItem(TOKEN_KEY, response.token),
-      setSessionItem(USER_KEY, JSON.stringify(response.user)),
-    ]);
+  const applyAuth = useCallback(async (response: { token: string; user: User; balance: number }, remember = true) => {
+    if (remember) {
+      await Promise.all([
+        setSessionItem(TOKEN_KEY, response.token),
+        setSessionItem(USER_KEY, JSON.stringify(response.user)),
+      ]);
+    } else {
+      // "Se souvenir de moi" unchecked: keep the session in memory only so the
+      // next app launch starts logged out.
+      await Promise.all([
+        deleteSessionItem(TOKEN_KEY).catch(() => undefined),
+        deleteSessionItem(USER_KEY).catch(() => undefined),
+      ]);
+    }
     setToken(response.token);
     setUser(response.user);
     setBalance(response.balance);
@@ -127,12 +136,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await applyAuth(response);
   }, [applyAuth]);
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string, remember = true) => {
     const response = await apiRequest<{ token: string; user: User; balance: number }>('/auth/login', {
       method: 'POST',
       body: { email, password },
     });
-    await applyAuth(response);
+    await applyAuth(response, remember);
   }, [applyAuth]);
 
   const signup = useCallback(async (displayName: string, email: string, password: string) => {

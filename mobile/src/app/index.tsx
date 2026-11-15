@@ -26,6 +26,7 @@ export default function WelcomeScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -56,7 +57,7 @@ export default function WelcomeScreen() {
     setSubmitting(true);
     try {
       if (mode === 'login') {
-        await login(normalizedEmail, password);
+        await login(normalizedEmail, password, rememberMe);
       } else {
         await signup(displayName.trim(), normalizedEmail, password);
       }
@@ -76,7 +77,6 @@ export default function WelcomeScreen() {
           <AnimatedBrand />
           <View style={styles.hero}>
             <View style={styles.badge}><Ionicons name="shield-checkmark" size={14} color={colors.accent} /><Text style={styles.badgeText}>Crédits virtuels uniquement</Text></View>
-            <Text style={styles.title}>LINAFOOT</Text>
             <Text style={styles.subtitle}>Connectez-vous ou créez un compte pour accéder aux matchs, paris simulés et votre portefeuille virtuel (aucun argent réel).</Text>
           </View>
 
@@ -107,6 +107,23 @@ export default function WelcomeScreen() {
                 <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.muted} />
               </Pressable>
             </View>
+
+            {mode === 'login' ? (
+              <Pressable
+                style={styles.rememberRow}
+                onPress={() => setRememberMe((value) => !value)}
+                accessibilityRole="checkbox"
+                accessibilityLabel="Se souvenir de moi"
+                accessibilityState={{ checked: rememberMe }}
+                aria-checked={rememberMe}
+                testID="remember-me"
+              >
+                <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+                  {rememberMe ? <Ionicons name="checkmark" size={14} color={colors.background} /> : null}
+                </View>
+                <Text style={styles.rememberText}>Se souvenir de moi</Text>
+              </Pressable>
+            ) : null}
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -139,7 +156,6 @@ const styles = StyleSheet.create({
   hero: { gap: 10 },
   badge: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: colors.accentDark, borderWidth: 1, borderColor: colors.accent },
   badgeText: { color: colors.accent, fontSize: 12, fontWeight: '700' },
-  title: { color: colors.text, fontSize: 30, fontWeight: '800', lineHeight: 36 },
   subtitle: { color: colors.muted, fontSize: 15, lineHeight: 22 },
   card: { backgroundColor: colors.surface, borderRadius: radius.large, borderWidth: 1, borderColor: colors.border, padding: 16, gap: 10 },
   tabs: { flexDirection: 'row', backgroundColor: colors.surfaceRaised, borderRadius: radius.medium, padding: 4, marginBottom: 4 },
@@ -152,6 +168,10 @@ const styles = StyleSheet.create({
   passwordRow: { position: 'relative', justifyContent: 'center' },
   passwordInput: { paddingRight: 44 },
   eye: { position: 'absolute', right: 12, height: '100%', justifyContent: 'center' },
+  rememberRow: { flexDirection: 'row', alignItems: 'center', gap: 9, alignSelf: 'flex-start', paddingVertical: 6, marginTop: 2 },
+  checkbox: { width: 20, height: 20, borderRadius: 6, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceRaised, alignItems: 'center', justifyContent: 'center' },
+  checkboxChecked: { backgroundColor: colors.accent, borderColor: colors.accent },
+  rememberText: { color: colors.muted, fontSize: 12, fontWeight: '600' },
   error: { color: colors.live, fontSize: 13 },
   button: { backgroundColor: colors.accent, borderRadius: radius.medium, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, marginTop: 6 },
   buttonDisabled: { opacity: 0.45 },
